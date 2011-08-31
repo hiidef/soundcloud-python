@@ -6,51 +6,46 @@ import itertools
 from textwrap import dedent
 import pkg_resources
 import logging
-import webbrowser
 from unittest import TestCase
 
 from configobj import ConfigObj
 from validate import Validator
 
 
-import scapi
-import scapi.authentication
+import soundcloud
 
-logger = logging.getLogger("scapi.tests")
+logger = logging.getLogger("soundcloud.tests")
 
-api_logger = logging.getLogger("scapi")
+api_logger = logging.getLogger("soundcloud")
 
 
-class SCAPITests(TestCase):
+class soundcloudTests(TestCase):
 
     CONFIG_NAME = "test.ini"
-    TOKEN = None
-    SECRET = None 
-    CONSUMER = None 
-    CONSUMER_SECRET = None 
+    CLIENT_ID = None
+    CLIENT_SECRET = None
+    TOKEN_URI = None
+    REDIRECT_URI = None
     API_HOST = None 
-    USER = None 
-    PASSWORD = None 
-    AUTHENTICATOR = None 
     RUN_INTERACTIVE_TESTS = False
     RUN_LONG_TESTS = False
+    TOKEN = None
     
     def setUp(self):
         self._load_config()
-        assert pkg_resources.resource_exists("scapi.tests.test_connect", "knaster.mp3")
-        self.data = pkg_resources.resource_stream("scapi.tests.test_connect", "knaster.mp3")
-        self.artwork_data = pkg_resources.resource_stream("scapi.tests.test_connect", "spam.jpg")
+        assert pkg_resources.resource_exists("soundcloud.tests.soundcloud_tests", "knaster.mp3")
+        self.data = pkg_resources.resource_stream("soundcloud.tests.soundcloud_tests", "knaster.mp3")
+        self.artwork_data = pkg_resources.resource_stream("soundcloud.tests.soundcloud_tests", "spam.jpg")
+
 
     CONFIGSPEC=dedent("""
     [api]
-    token=string
-    secret=string
-    consumer=string
-    consumer_secret=string
-    api_host=string
-    user=string
-    password=string
-    authenticator=option('oauth', 'base', default='oauth')
+    api_host=string(default=api.soundcloud.com)
+    client_id=string
+    client_secret=string
+    token_uri=string
+    redirect_uri=string
+    access_token=string
     
     [proxy]
     use_proxy=boolean(default=false)
@@ -69,7 +64,7 @@ class SCAPITests(TestCase):
         """
         Loads the configuration by looking from
 
-         - the environment variable SCAPI_CONFIG
+         - the environment variable soundcloud_CONFIG
          - the installation location upwards until it finds test.ini
          - the current working directory upwards until it finds test.ini
 
@@ -79,9 +74,9 @@ class SCAPITests(TestCase):
 
         name = None
 
-        if "SCAPI_CONFIG" in os.environ:
-            if os.path.exists(os.environ["SCAPI_CONFIG"]):
-                name = os.environ["SCAPI_CONFIG"]
+        if "soundcloud_CONFIG" in os.environ:
+            if os.path.exists(os.environ["soundcloud_CONFIG"]):
+                name = os.environ["soundcloud_CONFIG"]
 
         def search_for_config(current):
             while current:
@@ -107,24 +102,16 @@ class SCAPITests(TestCase):
             raise Exception("Config file validation error")
 
         api = parser['api']
-        self.TOKEN = api.get('token')
-        self.SECRET = api.get('secret')
-        self.CONSUMER = api.get('consumer')
-        self.CONSUMER_SECRET = api.get('consumer_secret')
         self.API_HOST = api.get('api_host')
-        self.USER = api.get('user', None)
-        self.PASSWORD = api.get('password', None)
-        self.AUTHENTICATOR = api.get("authenticator")
-
-        # reset the hard-coded values in the api
-        if self.API_HOST:
-            scapi.AUTHORIZATION_URL = "http://%s/oauth/authorize" % self.API_HOST
-            scapi.REQUEST_TOKEN_URL = 'http://%s/oauth/request_token' % self.API_HOST
-            scapi.ACCESS_TOKEN_URL = 'http://%s/oauth/access_token' % self.API_HOST
+        self.CLIENT_ID = api.get('client_id')
+        self.CLIENT_SECRET = api.get('client_secret')
+        self.TOKEN_URI = api.get('token_uri')
+        self.REDIRECT_URI = api.get('redirect_uri')
+        self.TOKEN = api.get('access_token')
 
         if "proxy" in parser and parser["proxy"]["use_proxy"]:
-            scapi.USE_PROXY = True
-            scapi.PROXY = parser["proxy"]["proxy"]
+            soundcloud.USE_PROXY = True
+            soundcloud.PROXY = parser["proxy"]["proxy"]
 
         if "logging" in parser:
             logger.setLevel(getattr(logging, parser["logging"]["test_logger"]))
@@ -138,21 +125,16 @@ class SCAPITests(TestCase):
         """
         Return the properly configured root-scope.
         """
-        if self.AUTHENTICATOR == "oauth":
-            authenticator = scapi.authentication.OAuthAuthenticator(self.CONSUMER, 
-                                                                    self.CONSUMER_SECRET,
-                                                                    self.TOKEN, 
-                                                                    self.SECRET)
-        elif self.AUTHENTICATOR == "base":
-            authenticator = scapi.authentication.BasicAuthenticator(self.USER, self.PASSWORD, self.CONSUMER, self.CONSUMER_SECRET)
-        else:
-            raise Exception("Unknown authenticator setting: %s", self.AUTHENTICATOR)
+        if self.TOKEN is None:
+            raise Exception("You haven't entered an access_token in your test.ini yet. Please run bootstrap_test.py first!")
 
-        connector = scapi.ApiConnector(host=self.API_HOST, 
-                                        authenticator=authenticator)
+        authenticator = soundcloud.OAuth2Authenticator( self.CLIENT_ID,
+                                                        self.CLIENT_SECRET,
+                                                        self.REDIRECT_URI,
+                                                        self.TOKEN)
+        connector = soundcloud.ApiConnector(authenticator)
 
-        logger.debug("RootScope: %s authenticator: %s", self.API_HOST, self.AUTHENTICATOR)
-        return scapi.Scope(connector)
+        return soundcloud.Scope(connector)
 
 
     def test_connect(self):
@@ -165,66 +147,31 @@ class SCAPITests(TestCase):
     #     quite_a_few_users = list(itertools.islice(sca.users(), 0, 127))
 
     #     logger.debug(quite_a_few_users)
-    #     assert isinstance(quite_a_few_users, list) and isinstance(quite_a_few_users[0], scapi.User)
+    #     assert isinstance(quite_a_few_users, list) and isinstance(quite_a_few_users[0], soundcloud.User)
         user = sca.me()
         logger.debug(user)
-        assert isinstance(user, scapi.User)
+        assert isinstance(user, soundcloud.User)
         contacts = list(user.contacts())
         assert isinstance(contacts, list)
         if contacts:
-            assert isinstance(contacts[0], scapi.User)
+            assert isinstance(contacts[0], soundcloud.User)
             logger.debug(contacts)
         tracks = list(user.tracks())
         assert isinstance(tracks, list)
         if tracks:
-            assert isinstance(tracks[0], scapi.Track)
+            assert isinstance(tracks[0], soundcloud.Track)
             logger.debug(tracks)
-
-
-    def test_access_token_acquisition(self):
-        """
-        This test is commented out because it needs user-interaction.
-        """
-        if not self.RUN_INTERACTIVE_TESTS:
-            return
-        oauth_authenticator = scapi.authentication.OAuthAuthenticator(self.CONSUMER, 
-                                                                      self.CONSUMER_SECRET,
-                                                                      None, 
-                                                                      None)
-
-        sca = scapi.ApiConnector(host=self.API_HOST, authenticator=oauth_authenticator)
-        token, secret = sca.fetch_request_token()
-        authorization_url = sca.get_request_token_authorization_url(token)
-        webbrowser.open(authorization_url)
-        oauth_verifier = raw_input("please enter verifier code as seen in the browser:")
-        
-        oauth_authenticator = scapi.authentication.OAuthAuthenticator(self.CONSUMER, 
-                                                                      self.CONSUMER_SECRET,
-                                                                      token, 
-                                                                      secret)
-
-        sca = scapi.ApiConnector(self.API_HOST, authenticator=oauth_authenticator)
-        token, secret = sca.fetch_access_token(oauth_verifier)
-        logger.info("Access token: '%s'", token)
-        logger.info("Access token secret: '%s'", secret)
-        # force oauth-authentication with the new parameters, and
-        # then invoke some simple test
-        self.AUTHENTICATOR = "oauth"
-        self.TOKEN = token
-        self.SECRET = secret
-        self.test_connect()
-
 
     def test_track_creation(self):
         sca = self.root
         track = sca.Track.new(title='bar', asset_data=self.data)
-        assert isinstance(track, scapi.Track)
+        assert isinstance(track, soundcloud.Track)
 
 
     def test_track_update(self):
         sca = self.root
         track = sca.Track.new(title='bar', asset_data=self.data)
-        assert isinstance(track, scapi.Track)
+        assert isinstance(track, soundcloud.Track)
         track.title='baz'
         track = sca.Track.get(track.id)
         assert track.title == "baz"
@@ -234,14 +181,14 @@ class SCAPITests(TestCase):
         sca = self.root
         user = sca.me()
         track = user.tracks.new(title="bar", asset_data=self.data)
-        assert isinstance(track, scapi.Track)
+        assert isinstance(track, soundcloud.Track)
 
 
     def test_upload(self):
         sca = self.root
         sca = self.root
         track = sca.Track.new(title='bar', asset_data=self.data)
-        assert isinstance(track, scapi.Track)
+        assert isinstance(track, soundcloud.Track)
 
 
     def test_contact_list(self):
@@ -250,7 +197,7 @@ class SCAPITests(TestCase):
         contacts = list(user.contacts())
         assert isinstance(contacts, list)
         if contacts:
-            assert isinstance(contacts[0], scapi.User)
+            assert isinstance(contacts[0], soundcloud.User)
 
 
     def test_permissions(self):
@@ -262,7 +209,7 @@ class SCAPITests(TestCase):
             logger.debug(permissions)
             assert isinstance(permissions, list)
             if permissions:
-                assert isinstance(permissions[0], scapi.User)
+                assert isinstance(permissions[0], soundcloud.User)
 
 
     def test_setting_permissions(self):
@@ -322,7 +269,7 @@ class SCAPITests(TestCase):
         me = sca.me()
 
         favorites = list(me.favorites())
-        assert favorites == [] or isinstance(favorites[0], scapi.Track)
+        assert favorites == [] or isinstance(favorites[0], soundcloud.Track)
 
         track = None
         for user in sca.users():
@@ -351,13 +298,13 @@ class SCAPITests(TestCase):
         sca = self.root
         
         tracks = list(sca.tracks())
-        if len(tracks) < scapi.ApiConnector.LIST_LIMIT:
-            for i in xrange(scapi.ApiConnector.LIST_LIMIT):
+        if len(tracks) < soundcloud.ApiConnector.LIST_LIMIT:
+            for i in xrange(soundcloud.ApiConnector.LIST_LIMIT):
                 sca.Track.new(title='test_track_%i' % i, asset_data=self.data)
         all_tracks = sca.tracks()
         assert not isinstance(all_tracks, list)
         all_tracks = list(all_tracks)
-        assert len(all_tracks) > scapi.ApiConnector.LIST_LIMIT
+        assert len(all_tracks) > soundcloud.ApiConnector.LIST_LIMIT
 
 
 
@@ -370,19 +317,13 @@ class SCAPITests(TestCase):
         tracks = list(sca.tracks(params={
             "bpm[from]" : "180",
             }))
-        if len(tracks) < scapi.ApiConnector.LIST_LIMIT:
-            for i in xrange(scapi.ApiConnector.LIST_LIMIT):
+        if len(tracks) < soundcloud.ApiConnector.LIST_LIMIT:
+            for i in xrange(soundcloud.ApiConnector.LIST_LIMIT):
                 sca.Track.new(title='test_track_%i' % i, asset_data=self.data)
         all_tracks = sca.tracks()
         assert not isinstance(all_tracks, list)
         all_tracks = list(all_tracks)
-        assert len(all_tracks) > scapi.ApiConnector.LIST_LIMIT
-
-
-    def test_events(self):
-        events = list(self.root.events())
-        assert isinstance(events, list)
-        assert isinstance(events[0], scapi.Event)
+        assert len(all_tracks) > soundcloud.ApiConnector.LIST_LIMIT
 
 
     def test_me_having_stress(self):
@@ -395,7 +336,7 @@ class SCAPITests(TestCase):
     def test_non_global_api(self):
         root = self.root
         me = root.me()
-        assert isinstance(me, scapi.User)
+        assert isinstance(me, soundcloud.User)
 
         # now get something *from* that user
         list(me.favorites())
@@ -439,11 +380,11 @@ class SCAPITests(TestCase):
 
     def test_track_creation_with_email_sharers(self):
         sca = self.root
-        emails = [dict(address="deets@web.de"), dict(address="hannes@soundcloud.com")]
+        emails = [dict(address="hans+sctest@hiidef.com")]
         track = sca.Track.new(title='bar', asset_data=self.data,
                               shared_to=dict(emails=emails)
                               )
-        assert isinstance(track, scapi.Track)
+        assert isinstance(track, soundcloud.Track)
 
 
 
@@ -453,7 +394,7 @@ class SCAPITests(TestCase):
                               asset_data=self.data,
                               artwork_data=self.artwork_data,
                               )
-        assert isinstance(track, scapi.Track)
+        assert isinstance(track, soundcloud.Track)
 
         track.title = "foobarbaz"
         
@@ -482,7 +423,7 @@ class SCAPITests(TestCase):
             }).next()
 
         
-        assert isinstance(track, scapi.Track)
+        assert isinstance(track, soundcloud.Track)
 
         stream_url = track.stream_url
 
@@ -497,7 +438,7 @@ class SCAPITests(TestCase):
             }).next()
 
         
-        assert isinstance(track, scapi.Track)
+        assert isinstance(track, soundcloud.Track)
 
         download_url = track.download_url
 
@@ -519,7 +460,7 @@ class SCAPITests(TestCase):
         playlist = me.playlists().next()
         # playlist = sca.Playlist.get(playlist.id)
 
-        assert isinstance(playlist, scapi.Playlist)
+        assert isinstance(playlist, soundcloud.Playlist)
 
         pl_tracks = playlist.tracks
 
@@ -541,7 +482,7 @@ class SCAPITests(TestCase):
         track = sca.Track.new(title='bar',
                               asset_data=self.data,
                               )
-        assert isinstance(track, scapi.Track)
+        assert isinstance(track, soundcloud.Track)
 
         track.artwork_data = self.artwork_data
 

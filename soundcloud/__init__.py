@@ -42,7 +42,9 @@ Something like http://127.0.0.1:10000/
 """
 PROXY = ''
 
+DEFAULT_CONNECT_URL = "https://soundcloud.com/connect"
 DEFAULT_TOKEN_URL = "https://api.soundcloud.com/oauth2/token"
+DEFAULT_API_HOST = "api.soundcloud.com"
 
 
 __all__ = ['SoundCloudAPI', 'USE_PROXY', 'PROXY']
@@ -103,24 +105,37 @@ class PartitionCollectionGenerator():
     else:
         return None
 
-def fetch_access_token(client_id, client_secret, redirect_uri, authorization_code, url=DEFAULT_TOKEN_URL):
-    params = {
-            'client_id': client_id,
-            'client_secret': client_secret,
-            'redirect_uri': redirect_uri,
-            'grant_type': 'authorization_code',
-            'scope': 'non-expiring',
-            'code': authorization_code
-        }
-    data = urllib.urlencode(params)
-    req = urllib2.Request(url, data)
-    resp = urllib2.urlopen(req)
-    try:
-        content = resp.read()
-        res = simplejson.loads(content)
-        return res['access_token']
-    finally:
-        resp.close()
+class OAuth2Authenticator(object):
+
+    def __init__(self, client_id, client_secret, redirect_uri, access_token=None, authorization_code=None):
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.redirect_uri = redirect_uri
+        self.authorization_code = authorization_code
+        self.access_token = access_token
+
+    def construct_connect_url(self):
+        return "%s?client_id=%s&redirect_uri=%s&response_type=code&scope=non-expiring" % (DEFAULT_CONNECT_URL, self.client_id, self.redirect_uri)
+
+    def fetch_access_token(self, url=DEFAULT_TOKEN_URL):
+        params = {
+                'client_id': self.client_id,
+                'client_secret': self.client_secret,
+                'redirect_uri': self.redirect_uri,
+                'grant_type': 'authorization_code',
+                'code': self.authorization_code
+            }
+        data = urllib.urlencode(params)
+        req = urllib2.Request(url, data)
+        resp = urllib2.urlopen(req)
+        try:
+            content = resp.read()
+            res = simplejson.loads(content)
+            token = res['access_token']
+            self.access_token = token
+            return token
+        finally:
+            resp.close()
 
 class ApiConnector(object):
     """
@@ -146,7 +161,7 @@ class ApiConnector(object):
     """
     LIST_LIMIT_PARAMETER = 'limit'
 
-    def __init__(self, host, access_token, base="", collapse_scope=True):
+    def __init__(self, authenticator, host=DEFAULT_API_HOST, base="", collapse_scope=True):
         """
         Constructor for the API-Singleton. Use it once with parameters, and then the
         subsequent calls internal to the API will work.
@@ -158,13 +173,14 @@ class ApiConnector(object):
         @param user: if given, the username for basic HTTP authentication
         @type password: str
         @param password: if the user is given, you have to give a password as well
+
         """
         self.host = host
         self.host = self.host.replace("http://", "")
         if self.host[-1] == '/': # Remove a trailing slash, but leave other slashes alone
           self.host = self.host[0:-1]
         
-        self.access_token = access_token
+        self.authenticator = authenticator
         self._base = base
         self.collapse_scope = collapse_scope
 
@@ -230,10 +246,11 @@ class Scope(object):
     an L{ApiConnector}-instance. Then you can query it 
     or create new resources like this:
 
-    >>> connector = scapi.ApiConnector(host='host', user='user', password='password') # initialize the API
-    >>> scope = scapi.Scope(connector) # get the root scope
+    >>> authenticator = soundcloud.OAuth2Authenticator(client_id='client_id', client_secret='client_secret', redirect_uri='recirect_uri', access_token='token')
+    >>> connector = soundcloud.ApiConnector(authenticator=authenticator) # initialize the API
+    >>> scope = soundcloud.Scope(connector) # get the root scope
     >>> users = list(scope.users())
-    [<scapi.User object at 0x12345>, ...]
+    [<soundcloud.User object at 0x12345>, ...]
 
     Please not that all resources that are lists are returned as B{generator}. So you need
     to either iterate over them, or call list(resources) on them.
@@ -243,7 +260,7 @@ class Scope(object):
 
     >>> user = scope.users().next()
     >>> list(user.contacts())
-    [<scapi.Contact object at 0x12345>, ...]
+    [<soundcloud.Contact object at 0x12345>, ...]
 
     """
     def __init__(self, connector, scope=None, parent=None):
@@ -252,9 +269,9 @@ class Scope(object):
 
         @param connector: The connector to use.
         @type connector: ApiConnector
-        @type scope: scapi.RESTBase
+        @type scope: soundcloud.RESTBase
         @param scope: the resource to make this scope belong to
-        @type parent: scapi.Scope
+        @type parent: soundcloud.Scope
         @param parent: the parent scope of this scope
         """
 
@@ -282,7 +299,7 @@ class Scope(object):
 
         A usage example would look like this:
 
-        >>> sca = scapi.Scope(connector)
+        >>> sca = soundcloud.Scope(connector)
         >>> track = sca.tracks(params={
               "filter" : "downloadable",
               }).next()
@@ -297,27 +314,11 @@ class Scope(object):
 
         req = urllib2.Request(url)
 
-        all_params = {}
-        if query:
-            all_params.update(cgi.parse_qs(query))
-
-        if not all_params:
-            all_params = None
-            
-        #self._connector.authenticator.augment_request(req, all_params, False)
-
-        auth_header = req.get_header("Authorization")
-        auth_header = auth_header[len("OAuth  "):]
-
         query_params = []
         if query:
             query_params.append(query)
 
-        for part in auth_header.split(","):
-            key, value = part.split("=")
-            assert key.startswith("oauth")
-            value = value[1:-1]
-            query_params.append("%s=%s" % (key, value))
+        query_params.append("%s=%s" % ("oauth_token", self._connector.authenticator.access_token))
 
         query = "&".join(query_params)
         url = urlparse.urlunparse((scheme, netloc, path, params, query, fragment))
@@ -413,7 +414,7 @@ class Scope(object):
 
         connector = self._get_connector()
 
-        queryparams['oauth_token'] = connector.access_token
+        queryparams['oauth_token'] = connector.authenticator.access_token
 
         def filelike(v):
             if isinstance(v, file):
@@ -704,23 +705,23 @@ class RESTBase(object):
 
         For example, to set a comment on a track, do
 
-        >>> sca = scapi.Scope(connector)
-        >>> track = scapi.Track.new(title='bar', sharing="private")
-        >>> comment = scapi.Comment.create(body="This is the body of my comment", timestamp=10)    
+        >>> sca = soundcloud.Scope(connector)
+        >>> track = soundcloud.Track.new(title='bar', sharing="private")
+        >>> comment = soundcloud.Comment.create(body="This is the body of my comment", timestamp=10)    
         >>> track.comments = comment
 
         To set a list of users as permissions, do
 
-        >>> sca = scapi.Scope(connector)
+        >>> sca = soundcloud.Scope(connector)
         >>> me = sca.me()
-        >>> track = scapi.Track.new(title='bar', sharing="private")
+        >>> track = soundcloud.Track.new(title='bar', sharing="private")
         >>> users = sca.users()
         >>> users_to_set = [user  for user in users[:10] if user != me]
         >>> track.permissions = users_to_set
         
         And finally, to simply change the title of a track, do
 
-        >>> sca = scapi.Scope(connector)
+        >>> sca = soundcloud.Scope(connector)
         >>> track = sca.Track.get(track_id)
         >>> track.title = "new_title"
  
@@ -779,7 +780,7 @@ class RESTBase(object):
         This is a convenience-method for creating an object that will be passed
         as parameter - e.g. a comment. A usage would look like this:
 
-        >>> sca = scapi.Scope(connector)
+        >>> sca = soundcloud.Scope(connector)
         >>> track = sca.Track.new(title='bar', sharing="private")
         >>> comment = sca.Comment.create(body="This is the body of my comment", timestamp=10)    
         >>> track.comments = comment
@@ -796,16 +797,16 @@ class RESTBase(object):
         
          - create an instance directly using the class:
 
-           >>> scope = scapi.Scope(connector)
+           >>> scope = soundcloud.Scope(connector)
            >>> scope.User.new(...)
-           <scapi.User object at 0x1234>
+           <soundcloud.User object at 0x1234>
 
          - create a instance in a certain scope:
 
-           >>> scope = scapi.Scope(connector)
-           >>> user = scapi.User("1")
+           >>> scope = soundcloud.Scope(connector)
+           >>> user = soundcloud.User("1")
            >>> track = user.tracks.new()
-           <scapi.Track object at 0x1234>
+           <soundcloud.Track object at 0x1234>
 
         @param scope: if not empty, a one-element tuple containing the Scope
         @type scope: tuple<Scope>[1]
@@ -822,7 +823,7 @@ class RESTBase(object):
         
         Simply pass a known id as argument. For example
 
-        >>> sca = scapi.Scope(connector)
+        >>> sca = soundcloud.Scope(connector)
         >>> track = sca.Track.get(id)
 
         """
@@ -894,9 +895,8 @@ class Track(RESTBase):
     KIND = 'tracks'
     ALIASES = ['favorites']
 
-    def get_temporary_download_url(self, oauth_token):
-        url = self.download_url
-        url += "?oauth_token=%s" % oauth_token
+    def get_temporary_download_url(self):
+        url = self.oauth_sign_get_request(self.download_url)
         resp = urllib2.urlopen(url)
         return resp.url
 
@@ -906,12 +906,6 @@ class Comment(RESTBase):
     A comment domain object/resource. 
     """
     KIND = 'comments'
-
-class Event(RESTBase):
-    """
-    A event domain object/resource. 
-    """
-    KIND = 'events'
 
 class Playlist(RESTBase):
     """
