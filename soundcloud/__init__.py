@@ -324,6 +324,23 @@ class Scope(object):
         url = urlparse.urlunparse((scheme, netloc, path, params, query, fragment))
         return url
 
+    def add_secret_token(self, url, secret_token):
+        scheme, netloc, path, params, query, fragment = urlparse.urlparse(url)
+
+        req = urllib2.Request(url)
+
+        query_params = []
+        if query:
+            query_params.append(query)
+
+        query_params.append("%s=%s" % ("secret_token", secret_token))
+        query_params.append("%s-%s" % ("client_id", self._connector.authenticator.client_id))
+
+        query = "&".join(query_params)
+        url = urlparse.urlunparse((scheme, netloc, path, params, query, fragment))
+        return url
+
+
 
     def _create_request(self, url, connector, parameters, queryparams, alternate_http_method=None, use_multipart=False):
         """
@@ -360,6 +377,8 @@ class Scope(object):
         req = MyRequest(url)
 
         req.add_header("Accept", "application/json")
+        if parameters is None and req.get_method() in ['PUT', 'POST']:
+            req.add_header("Content-Length", "0")
         return req
 
 
@@ -431,6 +450,13 @@ class Scope(object):
         if urlparams is not None:
             fileargs = dict((key, value) for key, value in urlparams.iteritems() if filelike(value))
             use_multipart = bool(fileargs)
+
+        if 'track[secret_token]' in kwargs and alternate_http_method == 'PUT':
+            # An inconsistency of the API. To reset the secret token, we do this:
+            # PUT https://api.soundcloud.com/tracks/123/secret-token
+            # without any request body.
+            urlparams = None
+            args = args + ('secret-token',)
 
         # ensure the method has a trailing /
         if method[-1] != "/":
@@ -896,7 +922,10 @@ class Track(RESTBase):
     ALIASES = ['favorites']
 
     def get_temporary_download_url(self):
-        url = self.oauth_sign_get_request(self.download_url)
+        if self.secret_token:
+            url = self.add_secret_token(self.download_url, self.secret_token)
+        else:
+            url = self.oauth_sign_get_request(self.download_url)
         resp = urllib2.urlopen(url)
         return resp.url
 
