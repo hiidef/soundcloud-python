@@ -334,7 +334,7 @@ class Scope(object):
             query_params.append(query)
 
         query_params.append("%s=%s" % ("secret_token", secret_token))
-        query_params.append("%s-%s" % ("client_id", self._connector.authenticator.client_id))
+        query_params.append("%s=%s" % ("client_id", self._connector.authenticator.client_id))
 
         query = "&".join(query_params)
         url = urlparse.urlunparse((scheme, netloc, path, params, query, fragment))
