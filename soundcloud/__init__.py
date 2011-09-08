@@ -921,11 +921,15 @@ class Track(RESTBase):
     KIND = 'tracks'
     ALIASES = ['favorites']
 
-    def get_temporary_download_url(self):
+    def get_secret_url(self):
         if self.secret_token:
             url = self.add_secret_token(self.download_url, self.secret_token)
         else:
             url = self.oauth_sign_get_request(self.download_url)
+        return url
+
+    def get_temporary_download_url(self):
+        url = self.get_secret_url()
         resp = urllib2.urlopen(url)
         return resp.url
 
