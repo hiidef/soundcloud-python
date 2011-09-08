@@ -288,6 +288,21 @@ class Scope(object):
         return self._connector
 
 
+    def _add_query_params(self, url, params):
+        scheme, netloc, path, params, query, fragment = urlparse.urlparse(url)
+
+        req = urllib2.Request(url)
+
+        query_params = []
+        if query:
+            query_params.append(query)
+
+        [query_params.append(param) for param in params]
+
+        query = "&".join(query_params)
+        url = urlparse.urlunparse((scheme, netloc, path, params, query, fragment))
+        return url
+
     def oauth_sign_get_request(self, url):
         """
         This method will take an arbitrary url, and rewrite it
@@ -310,36 +325,19 @@ class Scope(object):
         >>> data = urllib2.urlopen(signed_url).read()
 
         """
-        scheme, netloc, path, params, query, fragment = urlparse.urlparse(url)
-
-        req = urllib2.Request(url)
-
-        query_params = []
-        if query:
-            query_params.append(query)
-
-        query_params.append("%s=%s" % ("oauth_token", self._connector.authenticator.access_token))
-
-        query = "&".join(query_params)
-        url = urlparse.urlunparse((scheme, netloc, path, params, query, fragment))
-        return url
+        params = ["%s=%s" % ("oauth_token", self._connector.authenticator.access_token)]
+        return self._add_query_params(url, params)
 
     def add_secret_token(self, url, secret_token):
-        scheme, netloc, path, params, query, fragment = urlparse.urlparse(url)
+        params = []
+        params.append("%s=%s" % ("secret_token", secret_token))
+        params.append("%s=%s" % ("client_id", self._connector.authenticator.client_id))
 
-        req = urllib2.Request(url)
+        return self._add_query_params(url, params)
 
-        query_params = []
-        if query:
-            query_params.append(query)
-
-        query_params.append("%s=%s" % ("secret_token", secret_token))
-        query_params.append("%s=%s" % ("client_id", self._connector.authenticator.client_id))
-
-        query = "&".join(query_params)
-        url = urlparse.urlunparse((scheme, netloc, path, params, query, fragment))
-        return url
-
+    def add_client_id(self, url):
+        params = ["%s=%s" % ("client_id", self._connector.authenticator.client_id)]
+        return self._add_query_params(url, params)
 
 
     def _create_request(self, url, connector, parameters, queryparams, alternate_http_method=None, use_multipart=False):
@@ -921,8 +919,37 @@ class Track(RESTBase):
     KIND = 'tracks'
     ALIASES = ['favorites']
 
+    """
+    Soundcloud's permissions for downloading are confusing. Here's what's required for downloading a track:
+
+    * If a track is PUBLIC and DOWNLOADABLE:
+        - Anybody can download the track. Simply append the client id to the track's download url
+        - Track.get(123).download_url + "?client_id=MYAPPSCLIENTID"
+            => https://api.soundcloud.com/tracks/123/download?client_id=MYAPPSCLIENTID
+    
+    * If a track is PRIVATE and DOWNLOADABLE:
+        - Request track's secret_token authenticated as track's owner and append it to the download url
+        - secret_token = Track.get(123).secret_token
+        - Track.get(123).download_url + "?secret_token=%s&client_id=%s" % (secret_token, client_id)
+            => https://api.soundcloud.com/tracks/123/download?secret_token=s-1234&client_id=MYAPPSCLIENTID
+
+    * If a track is PUBLIC and NOT DOWNLOADABLE:
+        - Authenticate as track's owner and append the OAuth access token to the track's download url
+        - If you share this url with anybody, they now have your oauth token. Bad!
+        - Track.get(123).download_url + "?oauth_token=MYSUPERSECRETACCESSTOKEN"
+            => https://api.soundcloud.com/tracks/123/download?oauth_token=MYSUPERSECRETACCESSTOKEN
+
+    * If a track is PRIVATE and NOT DOWNLOADABLE:
+        - Authenticate as track's owner and append the OAuth access token to the track's download url
+        - If you share this url with anybody, they now have your oauth token. Bad!
+        - Track.get(123).download_url + "?oauth_token=MYSUPERSECRETACCESSTOKEN"
+            => https://api.soundcloud.com/tracks/123/download?oauth_token=MYSUPERSECRETACCESSTOKEN
+        
+     """
     def get_secret_url(self):
-        if self.secret_token:
+        if self.sharing == 'public' and self.downloadable:
+            url = self.add_client_id(self.download_url)
+        elif self.sharing == 'private' and self.downloadable:
             url = self.add_secret_token(self.download_url, self.secret_token)
         else:
             url = self.oauth_sign_get_request(self.download_url)
