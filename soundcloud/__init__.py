@@ -288,7 +288,7 @@ class Scope(object):
         return self._connector
 
 
-    def _add_query_params(self, url, params):
+    def _add_query_params(self, url, addparams):
         scheme, netloc, path, params, query, fragment = urlparse.urlparse(url)
 
         req = urllib2.Request(url)
@@ -297,7 +297,7 @@ class Scope(object):
         if query:
             query_params.append(query)
 
-        [query_params.append(param) for param in params]
+        [query_params.append(param) for param in addparams]
 
         query = "&".join(query_params)
         url = urlparse.urlunparse((scheme, netloc, path, params, query, fragment))
